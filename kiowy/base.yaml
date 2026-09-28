@@ -12,7 +12,7 @@ backports:
   - upstreamPR: https://github.com/kubernetes-sigs/cluster-api-provider-gcp/pull/1639
     title: "Support Workload Identity Federation for CAPG controller authentication"
     upstreamMergeCommit: 43be338b8ca1456fbba102179ec8b3fd309d8d23
-    cherryPickedAs: 6d8be9958734b3f057d95347e8cbc03bdccbb175 # backport/wif-1639-onto-release-1.13, pre-merge; update after merging into kiowy/release-1.13
+    cherryPickedAs: 6d8be9958734b3f057d95347e8cbc03bdccbb175 # merged into kiowy/release-1.13 via merge commit 5e104377 (PR #1)
     reason: >-
       Upstream v1.13.1 has no support for GKE Workload Identity Federation:
       the controller errors with "no ADC environment variable found for
