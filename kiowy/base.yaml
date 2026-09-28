@@ -1,0 +1,30 @@
+# Machine-readable record of this fork's upstream base and included backports.
+# Read by humans and CI (kiowy-release.yml) to stamp image metadata and release notes.
+# Update this file in the same PR/commit that adds a new backport.
+upstream:
+  repository: https://github.com/kubernetes-sigs/cluster-api-provider-gcp
+  baseTag: v1.13.1
+  baseCommit: 8198b8b908032379d75975bb1ba38e7424f87bbe
+
+maintenanceBranch: kiowy/release-1.13
+
+backports:
+  - upstreamPR: https://github.com/kubernetes-sigs/cluster-api-provider-gcp/pull/1639
+    title: "Support Workload Identity Federation for CAPG controller authentication"
+    upstreamMergeCommit: 43be338b8ca1456fbba102179ec8b3fd309d8d23
+    cherryPickedAs: 6d8be9958734b3f057d95347e8cbc03bdccbb175 # backport/wif-1639-onto-release-1.13, pre-merge; update after merging into kiowy/release-1.13
+    reason: >-
+      Upstream v1.13.1 has no support for GKE Workload Identity Federation:
+      the controller errors with "no ADC environment variable found for
+      credentials" when neither credentialsRef nor
+      GOOGLE_APPLICATION_CREDENTIALS is set. This backport lets the
+      controller fall back to implicit ADC (GKE metadata server) for both
+      the GCP client libraries and GKE kubeconfig token generation.
+
+releases: []
+# Each kiowy release tag appends an entry here, e.g.:
+# - tag: v1.13.1-kiowy.1
+#   commit: <sha of the tagged commit on kiowy/release-1.13>
+#   image: ghcr.io/kiowy-org/cluster-api-gcp-controller
+#   digest: sha256:<digest>
+#   date: 2026-09-29
