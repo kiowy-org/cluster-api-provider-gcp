@@ -1,0 +1,250 @@
+# Kiowy release publication for the CAPG fork.
+#
+# Triggers only on Kiowy release tags (vX.Y.Z-kiowy.N) - never on branch
+# pushes - and always builds/tests the exact tagged commit, never a moving
+# branch. Publishing steps only run after that commit is verified to be an
+# ancestor of the approved `kiowy/release-1.13` maintenance branch and after
+# the tagged source re-passes tests/lint/verify in this same workflow.
+name: Kiowy release
+
+on:
+  push:
+    tags:
+      - "v*-kiowy.*"
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/kiowy-org/cluster-api-gcp-controller
+  MAINTENANCE_BRANCH: kiowy/release-1.13
+
+jobs:
+  gate:
+    name: Verify tag provenance & re-test tagged source
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.rev.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve tagged commit
+        id: rev
+        run: echo "sha=$(git rev-list -n1 "${GITHUB_REF_NAME}")" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse annotated/lightweight tag drift (tag must point at a real commit)
+        env:
+          TAG_SHA: ${{ steps.rev.outputs.sha }}
+        run: git cat-file -e "${TAG_SHA}^{commit}"
+
+      - name: Verify tagged commit is on the approved maintenance branch
+        env:
+          TAG_SHA: ${{ steps.rev.outputs.sha }}
+        run: |
+          git fetch origin "${MAINTENANCE_BRANCH}"
+          if ! git merge-base --is-ancestor "${TAG_SHA}" "origin/${MAINTENANCE_BRANCH}"; then
+            echo "::error::Tag ${GITHUB_REF_NAME} (${TAG_SHA}) is not an ancestor of origin/${MAINTENANCE_BRANCH}. Refusing to release."
+            exit 1
+          fi
+
+      - name: Verify required status checks passed for the maintenance branch tip history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG_SHA: ${{ steps.rev.outputs.sha }}
+        run: |
+          # Defense in depth: branch protection on ${MAINTENANCE_BRANCH} is the
+          # primary enforcement (required "Kiowy CI" checks before merge). Here we
+          # additionally confirm GitHub has a recorded successful Kiowy CI run
+          # for the tagged commit's associated pull request(s), when available.
+          checks=$(gh api "repos/${REPO}/commits/${TAG_SHA}/check-runs" --jq '[.check_runs[] | select(.name | startswith("Kiowy CI"))]')
+          count=$(echo "${checks}" | jq 'length')
+          if [ "${count}" -gt 0 ]; then
+            failed=$(echo "${checks}" | jq '[.[] | select(.conclusion != "success")] | length')
+            if [ "${failed}" -gt 0 ]; then
+              echo "::error::Kiowy CI check(s) recorded for ${TAG_SHA} did not succeed."
+              exit 1
+            fi
+          else
+            echo "::notice::No Kiowy CI check-run recorded directly against ${TAG_SHA} (expected if merged via squash/rebase). Relying on branch protection + re-test below."
+          fi
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Re-test the exact tagged source
+        env:
+          TAG_SHA: ${{ steps.rev.outputs.sha }}
+        run: |
+          git checkout "${TAG_SHA}"
+          make test
+          make lint
+          make verify
+
+  release:
+    name: Build, publish, attest
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: kiowy-release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EXPECTED_SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh api "repos/${REPO}/pkgs/container/cluster-api-gcp-controller/versions" --paginate \
+              --jq '.[].metadata.container.tags[]?' 2>/dev/null | grep -qx "${tag}"; then
+            echo "::error::Image tag ${tag} already exists in ${IMAGE_NAME}. Kiowy release tags are immutable; bump the -kiowy.N suffix."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/tmp/existing_tag 2>/dev/null; then
+            actual_tag_obj=$(cut -f1 /tmp/existing_tag)
+            actual=$(git rev-list -n1 "${actual_tag_obj}")
+            if [ "${actual}" != "${EXPECTED_SHA}" ]; then
+              echo "::error::Remote tag ${tag} no longer points at the expected commit (possible tag mutation). Refusing to release."
+              exit 1
+            fi
+          fi
+
+      - name: Compute version ldflags for the tagged source
+        id: version
+        run: echo "ldflags=$(hack/version.sh)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.9.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.7.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.gate.outputs.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            com.kiowy.upstream-repository=https://github.com/kubernetes-sigs/cluster-api-provider-gcp
+            com.kiowy.upstream-base-tag=v1.13.1
+            com.kiowy.upstream-base-commit=8198b8b908032379d75975bb1ba38e7424f87bbe
+            com.kiowy.backport-upstream-pr=https://github.com/kubernetes-sigs/cluster-api-provider-gcp/pull/1639
+            com.kiowy.backport-upstream-merge-commit=43be338b8ca1456fbba102179ec8b3fd309d8d23
+            com.kiowy.maintenance-branch=${{ env.MAINTENANCE_BRANCH }}
+
+      - name: Build and push (amd64 + arm64)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.15.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          build-args: |
+            ARCH=amd64
+            LDFLAGS=${{ steps.version.outputs.ldflags }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Attest build provenance (GitHub-native attestation)
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1.4.4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate SBOM for the published image
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.20.5
+        with:
+          image: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ github.token }}
+
+      - name: Attest SBOM (GitHub-native attestation)
+        uses: actions/attest-sbom@21f269c03431211cf2de4a1b5d90001746539dc9 # v2.4.0
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+
+      - name: Record release in kiowy/base.yaml and open a PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ needs.gate.outputs.sha }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          git fetch origin "${MAINTENANCE_BRANCH}"
+          git checkout -B "kiowy/record-release-${GITHUB_REF_NAME}" "origin/${MAINTENANCE_BRANCH}"
+          python3 - <<'PYEOF'
+          import datetime, os, re
+          tag = os.environ["GITHUB_REF_NAME"]
+          sha = os.environ["GATE_SHA"]
+          digest = os.environ["DIGEST"]
+          entry = (
+              f"  - tag: {tag}\n"
+              f"    commit: {sha}\n"
+              f"    image: ghcr.io/kiowy-org/cluster-api-gcp-controller\n"
+              f"    digest: {digest}\n"
+              f"    date: {datetime.date.today().isoformat()}\n"
+          )
+          with open("kiowy/base.yaml") as f:
+              content = f.read()
+          content = content.replace("releases: []", "releases:\n" + entry.rstrip("\n"), 1) if "releases: []" in content else content.rstrip("\n") + "\n" + entry
+          with open("kiowy/base.yaml", "w") as f:
+              f.write(content)
+          PYEOF
+          git config user.name "kiowy-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add kiowy/base.yaml
+          git commit -m "chore(kiowy): record release ${GITHUB_REF_NAME}"
+          git push -f origin "kiowy/record-release-${GITHUB_REF_NAME}"
+          gh pr create --title "chore(kiowy): record release ${GITHUB_REF_NAME}" \
+            --body "Automated: records the published image digest for ${GITHUB_REF_NAME} in kiowy/base.yaml." \
+            --base "${MAINTENANCE_BRANCH}" --head "kiowy/record-release-${GITHUB_REF_NAME}" || true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ needs.gate.outputs.sha }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          notes_file="$(mktemp)"
+          cat > "${notes_file}" <<EOF
+          Kiowy build of CAPG based on upstream \`v1.13.1\` (commit \`8198b8b908032379d75975bb1ba38e7424f87bbe\`),
+          with upstream PR #1639 (Workload Identity Federation support, merge commit
+          \`43be338b8ca1456fbba102179ec8b3fd309d8d23\`) backported onto \`${MAINTENANCE_BRANCH}\`.
+
+          - Source commit: \`${GATE_SHA}\`
+          - Image: \`${IMAGE_NAME}:${GITHUB_REF_NAME}\`
+          - Digest: \`${DIGEST}\`
+          - SBOM and build provenance attached as GitHub attestations (\`gh attestation verify\`).
+
+          See \`kiowy/MAINTENANCE.md\` and \`kiowy/base.yaml\` for the full backport record.
+          EOF
+          gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file "${notes_file}"

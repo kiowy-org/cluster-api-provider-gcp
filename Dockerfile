@@ -38,7 +38,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} \
     -o manager .
 
 # Copy the controller-manager into a thin image
-FROM cgr.dev/chainguard/static:latest
+# Pinned by digest (kiowy): re-resolve with
+#   crane digest cgr.dev/chainguard/static:latest
+# and update both the tag and digest together when bumping.
+FROM cgr.dev/chainguard/static:latest@sha256:41e17ed83c594a64a9396b6ab96dd26d5ddc290dacf4c177464712ff21ad534f
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER nobody
