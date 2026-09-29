@@ -21,7 +21,12 @@ backports:
       controller fall back to implicit ADC (GKE metadata server) for both
       the GCP client libraries and GKE kubeconfig token generation.
 
-releases: []
+releases:
+  - tag: v1.13.1-kiowy.1
+    commit: a5b8c40394576a1fdfdcd40c95f27ea3f1f389f8
+    image: ghcr.io/kiowy-org/cluster-api-gcp-controller
+    digest: sha256:f31f9e28d94506ed63009989fd00bc009ecd66a3032c08e4aa62dd775ed6fc48
+    date: 2026-09-29
 # Each kiowy release tag appends an entry here, e.g.:
 # - tag: v1.13.1-kiowy.1
 #   commit: <sha of the tagged commit on kiowy/release-1.13>
