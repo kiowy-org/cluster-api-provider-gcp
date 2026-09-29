@@ -196,9 +196,11 @@ jobs:
       - name: Record release in kiowy/base.yaml and open a PR
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           GATE_SHA: ${{ needs.gate.outputs.sha }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
           git fetch origin "${MAINTENANCE_BRANCH}"
           git checkout -B "kiowy/record-release-${GITHUB_REF_NAME}" "origin/${MAINTENANCE_BRANCH}"
           python3 - <<'PYEOF'
@@ -229,6 +231,7 @@ jobs:
             --base "${MAINTENANCE_BRANCH}" --head "kiowy/record-release-${GITHUB_REF_NAME}" || true
 
       - name: Create GitHub Release
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           GATE_SHA: ${{ needs.gate.outputs.sha }}
