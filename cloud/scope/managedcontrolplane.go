@@ -29,6 +29,7 @@ import (
 	resourcemanager "cloud.google.com/go/resourcemanager/apiv3"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	infrav1exp "sigs.k8s.io/cluster-api-provider-gcp/exp/api/v1beta1"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -215,6 +216,47 @@ func (s *ManagedControlPlaneScope) GetAllNodePools(ctx context.Context) ([]infra
 func (s *ManagedControlPlaneScope) Region() string {
 	loc, _ := location.Parse(s.GCPManagedControlPlane.Spec.Location)
 	return loc.Region
+}
+
+// Project returns the project the GKE cluster is created in.
+func (s *ManagedControlPlaneScope) Project() string {
+	return s.GCPManagedControlPlane.Spec.Project
+}
+
+// NetworkProject returns the project name where the cluster's network resources exist.
+// The network project defaults to Project when the referenced GCPManagedCluster does not
+// specify a HostProject (i.e. when the cluster is not on a Shared VPC).
+func (s *ManagedControlPlaneScope) NetworkProject() string {
+	return ptr.Deref(s.GCPManagedCluster.Spec.Network.HostProject, s.Project())
+}
+
+// IsSharedVpc returns true if the cluster's network resources live in a different
+// project than the GKE cluster itself (Shared VPC).
+func (s *ManagedControlPlaneScope) IsSharedVpc() bool {
+	return s.NetworkProject() != s.Project()
+}
+
+// NetworkFullName returns the network name, qualified with its host project when the
+// cluster uses a Shared VPC. The GKE API requires this qualified form
+// (projects/<host-project>/global/networks/<name>) to resolve a network that lives in a
+// different project than the one the GKE cluster is being created in; a bare name is
+// otherwise resolved relative to the cluster's own project and would fail to be found.
+func (s *ManagedControlPlaneScope) NetworkFullName() string {
+	name := ptr.Deref(s.GCPManagedCluster.Spec.Network.Name, "")
+	if name == "" || !s.IsSharedVpc() {
+		return name
+	}
+	return fmt.Sprintf("projects/%s/global/networks/%s", s.NetworkProject(), name)
+}
+
+// SubnetworkFullName returns the given subnetwork name, qualified with its host project
+// and region when the cluster uses a Shared VPC (see NetworkFullName for why this
+// qualification is required).
+func (s *ManagedControlPlaneScope) SubnetworkFullName(subnetworkName string) string {
+	if subnetworkName == "" || !s.IsSharedVpc() {
+		return subnetworkName
+	}
+	return fmt.Sprintf("projects/%s/regions/%s/subnetworks/%s", s.NetworkProject(), s.Region(), subnetworkName)
 }
 
 // ClusterLocation returns the location of the cluster.
