@@ -279,14 +279,7 @@ func (s *Service) createCluster(ctx context.Context, log *logr.Logger) error {
 	if s.scope.GCPManagedControlPlane.Spec.ClusterNetwork != nil {
 		cn := s.scope.GCPManagedControlPlane.Spec.ClusterNetwork
 		if cn.UseIPAliases {
-			cluster.IpAllocationPolicy = &containerpb.IPAllocationPolicy{}
-			cluster.IpAllocationPolicy.UseIpAliases = cn.UseIPAliases
-			if cn.Pod != nil {
-				cluster.IpAllocationPolicy.ClusterIpv4CidrBlock = cn.Pod.CidrBlock
-			}
-			if cn.Service != nil {
-				cluster.IpAllocationPolicy.ServicesIpv4CidrBlock = cn.Service.CidrBlock
-			}
+			cluster.IpAllocationPolicy = buildIPAllocationPolicy(cn)
 		}
 
 		if cn.PrivateCluster != nil {
@@ -368,6 +361,33 @@ func (s *Service) createCluster(ctx context.Context, log *logr.Logger) error {
 	}
 
 	return nil
+}
+
+// buildIPAllocationPolicy builds the IPAllocationPolicy for a GKE cluster from the given
+// ClusterNetwork spec. For each of Pod/Service, SecondaryRangeName takes precedence over
+// CidrBlock when set: SecondaryRangeName references an existing named secondary range on
+// the cluster's subnetwork (required for Shared VPC, where GKE cannot provision a new
+// range on a subnetwork it does not own), while CidrBlock has GKE provision a new range
+// itself (the common, non-Shared-VPC case).
+func buildIPAllocationPolicy(cn *infrav1exp.ClusterNetwork) *containerpb.IPAllocationPolicy {
+	policy := &containerpb.IPAllocationPolicy{
+		UseIpAliases: cn.UseIPAliases,
+	}
+	if cn.Pod != nil {
+		if cn.Pod.SecondaryRangeName != "" {
+			policy.ClusterSecondaryRangeName = cn.Pod.SecondaryRangeName
+		} else {
+			policy.ClusterIpv4CidrBlock = cn.Pod.CidrBlock
+		}
+	}
+	if cn.Service != nil {
+		if cn.Service.SecondaryRangeName != "" {
+			policy.ServicesSecondaryRangeName = cn.Service.SecondaryRangeName
+		} else {
+			policy.ServicesIpv4CidrBlock = cn.Service.CidrBlock
+		}
+	}
+	return policy
 }
 
 // getSubnetNameInClusterRegion returns the subnet which is in the same region as cluster. If not found it returns empty string.

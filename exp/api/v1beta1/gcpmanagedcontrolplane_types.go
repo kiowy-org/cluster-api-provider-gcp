@@ -63,18 +63,34 @@ type PrivateCluster struct {
 type ClusterNetworkPod struct {
 	// CidrBlock is where all pods in the cluster are assigned an IP address from this range. Enter a range
 	// (in CIDR notation) within a network range, a mask, or leave this field blank to use a default range.
-	// This setting is permanent.
+	// This setting is permanent. CidrBlock has no effect when SecondaryRangeName is set.
 	// +optional
 	CidrBlock string `json:"cidrBlock,omitempty"`
+
+	// SecondaryRangeName is the name of an existing secondary IP range on the cluster's
+	// subnetwork to use for pod IPs, rather than having GKE provision a new range from
+	// CidrBlock. This is required when the subnetwork belongs to a Shared VPC host
+	// project, since GKE cannot create new secondary ranges on a subnetwork it does not
+	// own; the named range must already exist on the subnetwork.
+	// +optional
+	SecondaryRangeName string `json:"secondaryRangeName,omitempty"`
 }
 
 // ClusterNetworkService defines the range of CIDRBlock list from where it gets the IP address.
 type ClusterNetworkService struct {
 	// CidrBlock is where cluster services will be assigned an IP address from this IP address range. Enter a range
 	// (in CIDR notation) within a network range, a mask, or leave this field blank to use a default range.
-	// This setting is permanent.
+	// This setting is permanent. CidrBlock has no effect when SecondaryRangeName is set.
 	// +optional
 	CidrBlock string `json:"cidrBlock,omitempty"`
+
+	// SecondaryRangeName is the name of an existing secondary IP range on the cluster's
+	// subnetwork to use for service IPs, rather than having GKE provision a new range from
+	// CidrBlock. This is required when the subnetwork belongs to a Shared VPC host
+	// project, since GKE cannot create new secondary ranges on a subnetwork it does not
+	// own; the named range must already exist on the subnetwork.
+	// +optional
+	SecondaryRangeName string `json:"secondaryRangeName,omitempty"`
 }
 
 // ClusterNetwork define the cluster network.
