@@ -251,8 +251,8 @@ func (s *Service) createCluster(ctx context.Context, log *logr.Logger) error {
 	cluster := &containerpb.Cluster{
 		Name:        s.scope.ClusterName(),
 		Description: s.scope.GCPManagedControlPlane.Spec.Description,
-		Network:     *s.scope.GCPManagedCluster.Spec.Network.Name,
-		Subnetwork:  s.getSubnetNameInClusterRegion(),
+		Network:     s.scope.NetworkFullName(),
+		Subnetwork:  s.scope.SubnetworkFullName(s.getSubnetNameInClusterRegion()),
 		Autopilot: &containerpb.Autopilot{
 			Enabled: s.scope.GCPManagedControlPlane.Spec.EnableAutopilot,
 		},
