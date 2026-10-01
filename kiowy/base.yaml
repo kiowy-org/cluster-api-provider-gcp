@@ -38,3 +38,8 @@ releases:
     image: ghcr.io/kiowy-org/cluster-api-gcp-controller
     digest: sha256:6c98d566b95bd196b155ce3e8f7b04f284e1a4d58359225b322cdd908b93dc51
     date: 2026-09-30
+  - tag: v1.13.1-kiowy.3
+    commit: dcfbad1d39eaca0c4077f979eed7fa6e62cd2062
+    image: ghcr.io/kiowy-org/cluster-api-gcp-controller
+    digest: sha256:ee552f43686e21e2d5110ae11271031ab508a71156aeb5221700481964067636
+    date: 2026-10-01
