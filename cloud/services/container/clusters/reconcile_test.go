@@ -701,3 +701,63 @@ func TestClusterNetworkNilPointerGuards(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildIPAllocationPolicy(t *testing.T) {
+	tests := []struct {
+		name                           string
+		cn                             *infrav1exp.ClusterNetwork
+		wantClusterIpv4CidrBlock       string
+		wantServicesIpv4CidrBlock      string
+		wantClusterSecondaryRangeName  string
+		wantServicesSecondaryRangeName string
+	}{
+		{
+			name: "CidrBlock used when SecondaryRangeName is unset (non-shared VPC)",
+			cn: &infrav1exp.ClusterNetwork{
+				UseIPAliases: true,
+				Pod:          &infrav1exp.ClusterNetworkPod{CidrBlock: "10.0.0.0/16"},
+				Service:      &infrav1exp.ClusterNetworkService{CidrBlock: "10.1.0.0/20"},
+			},
+			wantClusterIpv4CidrBlock:  "10.0.0.0/16",
+			wantServicesIpv4CidrBlock: "10.1.0.0/20",
+		},
+		{
+			name: "SecondaryRangeName takes precedence over CidrBlock (Shared VPC)",
+			cn: &infrav1exp.ClusterNetwork{
+				UseIPAliases: true,
+				Pod:          &infrav1exp.ClusterNetworkPod{CidrBlock: "10.0.0.0/16", SecondaryRangeName: "pods-2"},
+				Service:      &infrav1exp.ClusterNetworkService{CidrBlock: "10.1.0.0/20", SecondaryRangeName: "services-2"},
+			},
+			wantClusterSecondaryRangeName:  "pods-2",
+			wantServicesSecondaryRangeName: "services-2",
+		},
+		{
+			name: "nil Pod and Service leave all fields empty",
+			cn: &infrav1exp.ClusterNetwork{
+				UseIPAliases: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildIPAllocationPolicy(tt.cn)
+
+			if got.GetUseIpAliases() != tt.cn.UseIPAliases {
+				t.Errorf("UseIpAliases = %v, want %v", got.GetUseIpAliases(), tt.cn.UseIPAliases)
+			}
+			if got.GetClusterIpv4CidrBlock() != tt.wantClusterIpv4CidrBlock {
+				t.Errorf("ClusterIpv4CidrBlock = %q, want %q", got.GetClusterIpv4CidrBlock(), tt.wantClusterIpv4CidrBlock)
+			}
+			if got.GetServicesIpv4CidrBlock() != tt.wantServicesIpv4CidrBlock {
+				t.Errorf("ServicesIpv4CidrBlock = %q, want %q", got.GetServicesIpv4CidrBlock(), tt.wantServicesIpv4CidrBlock)
+			}
+			if got.GetClusterSecondaryRangeName() != tt.wantClusterSecondaryRangeName {
+				t.Errorf("ClusterSecondaryRangeName = %q, want %q", got.GetClusterSecondaryRangeName(), tt.wantClusterSecondaryRangeName)
+			}
+			if got.GetServicesSecondaryRangeName() != tt.wantServicesSecondaryRangeName {
+				t.Errorf("ServicesSecondaryRangeName = %q, want %q", got.GetServicesSecondaryRangeName(), tt.wantServicesSecondaryRangeName)
+			}
+		})
+	}
+}
