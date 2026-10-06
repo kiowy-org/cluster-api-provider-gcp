@@ -20,6 +20,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"strings"
+	"time"
 
 	"cloud.google.com/go/compute/metadata"
 	"cloud.google.com/go/container/apiv1/containerpb"
@@ -40,36 +42,52 @@ import (
 const (
 	// GkeScope is the scope to request when generating access token.
 	GkeScope = "https://www.googleapis.com/auth/cloud-platform"
+	// GkeEmailScope lets the Kubernetes API server resolve the token identity.
+	GkeEmailScope                      = "https://www.googleapis.com/auth/userinfo.email"
+	kubeconfigTokenExpiryAnnotation    = "infrastructure.cluster.x-k8s.io/kubeconfig-token-expiry"
+	kubeconfigServiceAccountAnnotation = "infrastructure.cluster.x-k8s.io/kubeconfig-service-account"
+	kubeconfigRefreshBeforeExpiry      = 5 * time.Minute
 )
 
-func (s *Service) reconcileKubeconfig(ctx context.Context, cluster *containerpb.Cluster, log *logr.Logger) error {
+func (s *Service) reconcileKubeconfig(ctx context.Context, cluster *containerpb.Cluster, log *logr.Logger) (time.Duration, error) {
 	log.Info("Reconciling kubeconfig")
-	clusterRef := types.NamespacedName{
-		Name:      s.scope.Cluster.Name,
-		Namespace: s.scope.Cluster.Namespace,
-	}
-
+	clusterRef := types.NamespacedName{Name: s.scope.Cluster.Name, Namespace: s.scope.Cluster.Namespace}
 	configSecret, err := secret.GetFromNamespacedName(ctx, s.scope.Client(), clusterRef, secret.Kubeconfig)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
-			log.Error(err, "getting kubeconfig secret", "name", clusterRef)
-			return fmt.Errorf("getting kubeconfig secret %s: %w", clusterRef, err)
+			return 0, fmt.Errorf("getting kubeconfig secret %s: %w", clusterRef, err)
 		}
-		log.Info("kubeconfig secret not found, creating")
-
-		if createErr := s.createCAPIKubeconfigSecret(
-			ctx,
-			cluster,
-			&clusterRef,
-			log,
-		); createErr != nil {
-			return fmt.Errorf("creating kubeconfig secret: %w", createErr)
+		configSecret, err = s.createCAPIKubeconfigSecret(ctx, cluster, &clusterRef, log)
+		if err != nil {
+			return 0, fmt.Errorf("creating kubeconfig secret: %w", err)
 		}
-	} else if updateErr := s.updateCAPIKubeconfigSecret(ctx, configSecret); updateErr != nil {
-		return fmt.Errorf("updating kubeconfig secret: %w", err)
+	} else if s.kubeconfigNeedsRefresh(configSecret) {
+		if err := s.updateCAPIKubeconfigSecret(ctx, configSecret); err != nil {
+			return 0, fmt.Errorf("updating kubeconfig secret: %w", err)
+		}
 	}
+	expiry, err := time.Parse(time.RFC3339, configSecret.Annotations[kubeconfigTokenExpiryAnnotation])
+	if err != nil {
+		return 0, fmt.Errorf("reading kubeconfig token expiry: %w", err)
+	}
+	return expiry.Sub(s.now()) - kubeconfigRefreshBeforeExpiry, nil
+}
 
-	return nil
+// kubeconfigNeedsRefresh also migrates Secrets created by earlier CAPG versions.
+func (s *Service) kubeconfigNeedsRefresh(configSecret *corev1.Secret) bool {
+	if configSecret.Annotations[kubeconfigServiceAccountAnnotation] != s.scope.GCPManagedControlPlane.Spec.KubeconfigServiceAccountEmail {
+		return true
+	}
+	expiry, err := time.Parse(time.RFC3339, configSecret.Annotations[kubeconfigTokenExpiryAnnotation])
+	return err != nil || !s.now().Add(kubeconfigRefreshBeforeExpiry).Before(expiry)
+}
+
+func (s *Service) setKubeconfigTokenAnnotations(configSecret *corev1.Secret, token *credentialspb.GenerateAccessTokenResponse) {
+	if configSecret.Annotations == nil {
+		configSecret.Annotations = map[string]string{}
+	}
+	configSecret.Annotations[kubeconfigTokenExpiryAnnotation] = token.GetExpireTime().AsTime().UTC().Format(time.RFC3339)
+	configSecret.Annotations[kubeconfigServiceAccountAnnotation] = s.scope.GCPManagedControlPlane.Spec.KubeconfigServiceAccountEmail
 }
 
 func (s *Service) reconcileAdditionalKubeconfigs(ctx context.Context, cluster *containerpb.Cluster, log *logr.Logger) error {
@@ -134,7 +152,7 @@ func (s *Service) createUserKubeconfigSecret(ctx context.Context, cluster *conta
 	return nil
 }
 
-func (s *Service) createCAPIKubeconfigSecret(ctx context.Context, cluster *containerpb.Cluster, clusterRef *types.NamespacedName, log *logr.Logger) error {
+func (s *Service) createCAPIKubeconfigSecret(ctx context.Context, cluster *containerpb.Cluster, clusterRef *types.NamespacedName, log *logr.Logger) (*corev1.Secret, error) {
 	controllerOwnerRef := *metav1.NewControllerRef(s.scope.GCPManagedControlPlane, infrav1exp.GroupVersion.WithKind("GCPManagedControlPlane"))
 
 	contextName := s.getKubeConfigContextName(false)
@@ -142,33 +160,34 @@ func (s *Service) createCAPIKubeconfigSecret(ctx context.Context, cluster *conta
 	cfg, err := s.createBaseKubeConfig(contextName, cluster)
 	if err != nil {
 		log.Error(err, "failed creating base config")
-		return fmt.Errorf("creating base kubeconfig: %w", err)
+		return nil, fmt.Errorf("creating base kubeconfig: %w", err)
 	}
 
 	token, err := s.generateToken(ctx)
 	if err != nil {
 		log.Error(err, "failed generating token")
-		return err
+		return nil, err
 	}
 	cfg.AuthInfos = map[string]*api.AuthInfo{
 		contextName: {
-			Token: token,
+			Token: token.GetAccessToken(),
 		},
 	}
 
 	out, err := clientcmd.Write(*cfg)
 	if err != nil {
 		log.Error(err, "failed serializing kubeconfig to yaml")
-		return fmt.Errorf("serialize kubeconfig to yaml: %w", err)
+		return nil, fmt.Errorf("serialize kubeconfig to yaml: %w", err)
 	}
 
 	kubeconfigSecret := kubeconfig.GenerateSecretWithOwner(*clusterRef, out, controllerOwnerRef)
+	s.setKubeconfigTokenAnnotations(kubeconfigSecret, token)
 	if err := s.scope.Client().Create(ctx, kubeconfigSecret); err != nil {
 		log.Error(err, "failed creating secret")
-		return fmt.Errorf("creating secret: %w", err)
+		return nil, fmt.Errorf("creating secret: %w", err)
 	}
 
-	return nil
+	return kubeconfigSecret, nil
 }
 
 func (s *Service) updateCAPIKubeconfigSecret(ctx context.Context, configSecret *corev1.Secret) error {
@@ -188,7 +207,11 @@ func (s *Service) updateCAPIKubeconfigSecret(ctx context.Context, configSecret *
 	}
 
 	contextName := s.getKubeConfigContextName(false)
-	config.AuthInfos[contextName].Token = token
+	authInfo := config.AuthInfos[contextName]
+	if authInfo == nil {
+		return errors.Errorf("missing auth info %q in kubeconfig Secret", contextName)
+	}
+	authInfo.Token = token.GetAccessToken()
 
 	out, err := clientcmd.Write(*config)
 	if err != nil {
@@ -196,6 +219,7 @@ func (s *Service) updateCAPIKubeconfigSecret(ctx context.Context, configSecret *
 	}
 
 	configSecret.Data[secret.KubeconfigDataName] = out
+	s.setKubeconfigTokenAnnotations(configSecret, token)
 
 	err = s.scope.Client().Update(ctx, configSecret)
 	if err != nil {
@@ -260,19 +284,31 @@ func (r metadataEmailResolver) Email(ctx context.Context) (string, error) {
 	return metadata.EmailWithContext(ctx, "default")
 }
 
-func (s *Service) generateToken(ctx context.Context) (string, error) {
+func (s *Service) generateToken(ctx context.Context) (*credentialspb.GenerateAccessTokenResponse, error) {
 	email, err := s.emailResolver.Email(ctx)
 	if err != nil {
-		return "", fmt.Errorf("resolving service account email: %w", err)
+		return nil, fmt.Errorf("resolving service account email: %w", err)
+	}
+	if !strings.HasSuffix(email, ".gserviceaccount.com") {
+		return nil, errors.Errorf("identity %q is not a Google service account email; configure kubeconfigServiceAccountEmail for direct Workload Identity access", email)
 	}
 	req := &credentialspb.GenerateAccessTokenRequest{
 		Name:  "projects/-/serviceAccounts/" + email,
-		Scope: []string{GkeScope},
+		Scope: []string{GkeScope, GkeEmailScope},
 	}
-	resp, err := s.scope.CredentialsClient().GenerateAccessToken(ctx, req)
+	resp, err := s.mintToken(ctx, req)
 	if err != nil {
-		return "", errors.Errorf("error generating access token: %v", err)
+		return nil, fmt.Errorf("error generating access token for %q: %w", email, err)
 	}
 
-	return resp.GetAccessToken(), nil
+	if resp.GetAccessToken() == "" || resp.GetExpireTime() == nil {
+		return nil, errors.New("IAM returned an access token without a value or expiration")
+	}
+	if err := resp.GetExpireTime().CheckValid(); err != nil {
+		return nil, fmt.Errorf("invalid access token expiration: %w", err)
+	}
+	if !s.now().Add(kubeconfigRefreshBeforeExpiry).Before(resp.GetExpireTime().AsTime()) {
+		return nil, errors.New("IAM returned an access token too close to expiration")
+	}
+	return resp, nil
 }

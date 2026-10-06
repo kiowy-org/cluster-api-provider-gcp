@@ -52,6 +52,15 @@ type GCPManagedControlPlaneClassSpec struct {
 	// +optional
 	EnableIdentityService bool `json:"enableIdentityService"`
 
+	// KubeconfigServiceAccountEmail is an existing Google service account used only
+	// to mint the CAPI kubeconfig token. The controller's Google Cloud API identity
+	// remains unchanged. The caller must have iam.serviceAccounts.getAccessToken
+	// on this account, and the account must be authorized in the workload cluster.
+	// When omitted, the existing credential or metadata email is used.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.gserviceaccount\.com$`
+	KubeconfigServiceAccountEmail string `json:"kubeconfigServiceAccountEmail,omitempty"`
+
 	// ReleaseChannel represents the release channel of the GKE cluster.
 	// +optional
 	ReleaseChannel *ReleaseChannel `json:"releaseChannel,omitempty"`

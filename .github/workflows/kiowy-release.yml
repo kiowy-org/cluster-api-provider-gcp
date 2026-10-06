@@ -194,6 +194,18 @@ jobs:
           sbom-path: sbom.spdx.json
           push-to-registry: true
 
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build matching Cluster API Operator release assets
+        run: |
+          make set-manifest-image MANIFEST_IMG="${IMAGE_NAME}" MANIFEST_TAG="${GITHUB_REF_NAME}"
+          make set-manifest-pull-policy PULL_POLICY=IfNotPresent
+          make release-manifests release-metadata release-templates
+          # The release-record PR must contain only its base.yaml update.
+          git restore config/default/manager_image_patch.yaml config/default/manager_pull_policy.yaml
+
       - name: Record release in kiowy/base.yaml and open a PR
         env:
           GH_TOKEN: ${{ github.token }}
@@ -232,7 +244,6 @@ jobs:
             --base "${MAINTENANCE_BRANCH}" --head "kiowy/record-release-${GITHUB_REF_NAME}" || true
 
       - name: Create GitHub Release
-        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           GATE_SHA: ${{ needs.gate.outputs.sha }}
@@ -247,8 +258,9 @@ jobs:
           - Source commit: \`${GATE_SHA}\`
           - Image: \`${IMAGE_NAME}:${GITHUB_REF_NAME}\`
           - Digest: \`${DIGEST}\`
+          - Matching controller components, CRDs, metadata, and cluster templates attached as YAML assets.
           - SBOM and build provenance attached as GitHub attestations (\`gh attestation verify\`).
 
           See \`kiowy/MAINTENANCE.md\` and \`kiowy/base.yaml\` for the full backport record.
           EOF
-          gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file "${notes_file}"
+          gh release create "${GITHUB_REF_NAME}" out/*.yaml --title "${GITHUB_REF_NAME}" --notes-file "${notes_file}"
