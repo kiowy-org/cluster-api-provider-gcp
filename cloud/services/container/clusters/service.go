@@ -17,6 +17,10 @@ limitations under the License.
 package clusters
 
 import (
+	"context"
+	"time"
+
+	"cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	"sigs.k8s.io/cluster-api-provider-gcp/cloud"
 	"sigs.k8s.io/cluster-api-provider-gcp/cloud/scope"
 )
@@ -25,6 +29,8 @@ import (
 type Service struct {
 	scope         *scope.ManagedControlPlaneScope
 	emailResolver tokenEmailResolver
+	mintToken     func(context.Context, *credentialspb.GenerateAccessTokenRequest) (*credentialspb.GenerateAccessTokenResponse, error)
+	now           func() time.Time
 }
 
 var _ cloud.ReconcilerWithResult = &Service{}
@@ -32,7 +38,9 @@ var _ cloud.ReconcilerWithResult = &Service{}
 // New returns Service from given scope.
 func New(s *scope.ManagedControlPlaneScope) *Service {
 	var resolver tokenEmailResolver
-	if cred := s.GetCredential(); cred != nil {
+	if email := s.GCPManagedControlPlane.Spec.KubeconfigServiceAccountEmail; email != "" {
+		resolver = credentialEmailResolver{email: email}
+	} else if cred := s.GetCredential(); cred != nil {
 		resolver = credentialEmailResolver{email: cred.ClientEmail}
 	} else {
 		resolver = metadataEmailResolver{}
@@ -40,5 +48,9 @@ func New(s *scope.ManagedControlPlaneScope) *Service {
 	return &Service{
 		scope:         s,
 		emailResolver: resolver,
+		now:           time.Now,
+		mintToken: func(ctx context.Context, req *credentialspb.GenerateAccessTokenRequest) (*credentialspb.GenerateAccessTokenResponse, error) {
+			return s.CredentialsClient().GenerateAccessToken(ctx, req)
+		},
 	}
 }

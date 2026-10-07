@@ -155,7 +155,7 @@ func (s *Service) Reconcile(ctx context.Context) (ctrl.Result, error) {
 	v1beta1conditions.MarkFalse(s.scope.ConditionSetter(), infrav1exp.GKEControlPlaneUpdatingCondition, infrav1exp.GKEControlPlaneUpdatedReason, clusterv1beta1.ConditionSeverityInfo, "")
 
 	// Reconcile kubeconfig
-	err = s.reconcileKubeconfig(ctx, cluster, &log)
+	refreshAfter, err := s.reconcileKubeconfig(ctx, cluster, &log)
 	if err != nil {
 		log.Error(err, "Failed to reconcile CAPI kubeconfig")
 		return ctrl.Result{}, err
@@ -175,7 +175,7 @@ func (s *Service) Reconcile(ctx context.Context) (ctrl.Result, error) {
 
 	log.Info("Cluster reconciled")
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: refreshAfter}, nil
 }
 
 // Delete delete GKE cluster.

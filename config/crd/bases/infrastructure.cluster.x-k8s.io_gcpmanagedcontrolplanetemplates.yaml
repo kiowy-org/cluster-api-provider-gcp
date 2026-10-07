@@ -176,6 +176,15 @@ spec:
                         description: EnableIdentityService indicates whether to enable
                           Identity Service component for this GKE cluster.
                         type: boolean
+                      kubeconfigServiceAccountEmail:
+                        description: |-
+                          KubeconfigServiceAccountEmail is an existing Google service account used only
+                          to mint the CAPI kubeconfig token. The controller's Google Cloud API identity
+                          remains unchanged. The caller must have iam.serviceAccounts.getAccessToken
+                          on this account, and the account must be authorized in the workload cluster.
+                          When omitted, the existing credential or metadata email is used.
+                        pattern: ^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.gserviceaccount\.com$
+                        type: string
                       location:
                         description: |-
                           Location represents the location (region or zone) in which the GKE cluster

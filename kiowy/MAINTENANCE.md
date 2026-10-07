@@ -51,6 +51,46 @@ CI and this document both assume it is accurate.
    commit being backported, any conflict resolutions, tests run, and known
    limitations. Get it reviewed and merged.
 
+## Fork-local enhancements
+
+Use `fix/<description>` branches based on `kiowy/release-1.13` for changes
+that are not upstream backports. Record these under `localChanges:` in
+`kiowy/base.yaml`; do not invent an upstream PR or cherry-pick SHA.
+The same Kiowy CI checks and PR review into the maintenance branch apply.
+After merge, record the implementation commit in the machine-readable entry.
+
+### Pre-provisioned kubeconfig service account
+
+Set `spec.kubeconfigServiceAccountEmail` on a `GCPManagedControlPlane`, or
+`spec.template.spec.kubeconfigServiceAccountEmail` on its template. For example:
+
+```yaml
+kubeconfigServiceAccountEmail: kubeconfig@example-project.iam.gserviceaccount.com
+```
+
+Provision the account separately (for example, through Crossplane). Grant
+the controller's federated principal `roles/iam.workloadIdentityUser` on
+that account, and authorize the account in the workload cluster using GKE
+IAM or Kubernetes RBAC. Enable the IAM Service Account Credentials API.
+This field changes only CAPI kubeconfig token generation; it does not
+change the controller's Google Cloud API credentials or the node identity.
+When omitted, explicit credentials and metadata-based service account
+resolution retain their existing behavior. A direct-access workload pool
+identifier produces an error asking for the explicit account field.
+
+CAPG requests `cloud-platform` and `userinfo.email` scopes, stores token
+expiry on the CAPI kubeconfig Secret, and schedules refresh five minutes
+before expiry. Secrets from older versions refresh on the next reconcile.
+Token-generation failures preserve the existing Secret. CAPI reconnects
+with the latest Secret after its cached credential becomes unauthorized;
+live validation must check this reconnect behavior and private endpoint
+reachability. Downloaded bearer-token kubeconfigs expire unless refreshed
+by a consumer; the separate user kubeconfig still uses the auth plugin.
+
+Use an email topology variable and a ClusterClass patch when each cluster
+needs a different account. Install the matching release CRDs before applying
+the field; overriding only the controller image is insufficient.
+
 ## Publishing a new release (e.g. `v1.13.1-kiowy.2`)
 
 Releases are built and published only by `.github/workflows/kiowy-release.yml`
@@ -76,7 +116,8 @@ Releases are built and published only by `.github/workflows/kiowy-release.yml`
    - attaches build provenance and an SPDX SBOM as GitHub attestations,
    - opens a PR to record the release digest in `kiowy/base.yaml`,
    - creates a GitHub Release with the source commit, upstream base, and
-     backport record.
+     backport record, attaching `infrastructure-components.yaml`,
+     `metadata.yaml`, and cluster templates built from the tagged source.
 4. The `kiowy-release` environment requires manual approval before the
    `release` job runs (configure required reviewers on that environment in
    repo settings) — approve it once you're ready to publish.

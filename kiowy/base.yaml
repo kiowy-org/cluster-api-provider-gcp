@@ -21,6 +21,18 @@ backports:
       controller fall back to implicit ADC (GKE metadata server) for both
       the GCP client libraries and GKE kubeconfig token generation.
 
+# Fork-local enhancements are not upstream cherry-picks.
+localChanges:
+  - title: "Use a pre-provisioned service account for GKE kubeconfig tokens"
+    branch: fix/kubeconfig-service-account
+    reason: >-
+      Direct GKE Workload Identity metadata identifiers cannot be passed to
+      IAM GenerateAccessToken. An explicit kubeconfigServiceAccountEmail
+      keeps controller API access direct while minting workload-cluster
+      credentials as an independently provisioned IAM service account.
+      Track expiry and refresh kubeconfig Secrets before token expiration;
+      publish matching CRDs and Operator components in Kiowy releases.
+
 releases:
   - tag: v1.13.1-kiowy.1
     commit: a5b8c40394576a1fdfdcd40c95f27ea3f1f389f8
