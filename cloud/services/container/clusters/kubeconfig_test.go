@@ -100,10 +100,10 @@ func newKubeconfigService(t *testing.T, account, explicitCredentialEmail string)
 	require.NoError(t, clusterv1.AddToScheme(scheme))
 	require.NoError(t, infrav1exp.AddToScheme(scheme))
 	cp := &infrav1exp.GCPManagedControlPlane{
-		ObjectMeta: metav1.ObjectMeta{Name: "control-plane", Namespace: "cell", UID: "owner"},
+		ObjectMeta: metav1.ObjectMeta{Name: "control-plane", Namespace: "test-namespace", UID: "owner"},
 		Spec: infrav1exp.GCPManagedControlPlaneSpec{
 			GCPManagedControlPlaneClassSpec: infrav1exp.GCPManagedControlPlaneClassSpec{
-				Project: "test-project", Location: "europe-west9", KubeconfigServiceAccountEmail: account,
+				Project: "test-project", Location: "us-central1", KubeconfigServiceAccountEmail: account,
 			},
 			ClusterName: "test-gke",
 		},
@@ -111,7 +111,7 @@ func newKubeconfigService(t *testing.T, account, explicitCredentialEmail string)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	scope, err := scope.NewManagedControlPlaneScope(context.Background(), scope.ManagedControlPlaneScopeParams{
 		Client:            k8sClient,
-		Cluster:           &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "workload", Namespace: "cell"}},
+		Cluster:           &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "workload", Namespace: "test-namespace"}},
 		GCPManagedCluster: &infrav1exp.GCPManagedCluster{}, GCPManagedControlPlane: cp,
 		ManagedClusterClient: &container.ClusterManagerClient{},
 		TagBindingsClient:    &resourcemanager.TagBindingsClient{}, CredentialsClient: &credentials.IamCredentialsClient{},
@@ -150,7 +150,7 @@ func TestGenerateToken_LegacyCredentialAccount(t *testing.T) {
 
 func TestGenerateToken_FederatedIdentityRequiresExplicitAccount(t *testing.T) {
 	s := newKubeconfigService(t, "", "")
-	s.emailResolver = credentialEmailResolver{email: "kiowy-prod-gke-0.svc.id.goog"}
+	s.emailResolver = credentialEmailResolver{email: "test-project.svc.id.goog"}
 	s.mintToken = func(context.Context, *credentialspb.GenerateAccessTokenRequest) (*credentialspb.GenerateAccessTokenResponse, error) {
 		t.Fatal("must not send a workload pool ID to IAM")
 		return nil, nil
@@ -184,13 +184,13 @@ func TestReconcileKubeconfig_RotationRestartAndFailures(t *testing.T) {
 		calls++
 		return &credentialspb.GenerateAccessTokenResponse{AccessToken: "token-" + s.now().Format(time.RFC3339), ExpireTime: timestamppb.New(s.now().Add(time.Hour))}, nil
 	}
-	cluster := &containerpb.Cluster{Endpoint: "10.0.192.7", MasterAuth: &containerpb.MasterAuth{ClusterCaCertificate: base64.StdEncoding.EncodeToString([]byte("certificate"))}}
+	cluster := &containerpb.Cluster{Endpoint: "192.0.2.10", MasterAuth: &containerpb.MasterAuth{ClusterCaCertificate: base64.StdEncoding.EncodeToString([]byte("certificate"))}}
 	log := logr.Discard()
 	delay, err := s.reconcileKubeconfig(ctx, cluster, &log)
 	require.NoError(t, err)
 	assert.Equal(t, 55*time.Minute, delay)
 	assert.Equal(t, 1, calls)
-	key := types.NamespacedName{Namespace: "cell", Name: "workload-kubeconfig"}
+	key := types.NamespacedName{Namespace: "test-namespace", Name: "workload-kubeconfig"}
 	getSecret := func() *corev1.Secret {
 		t.Helper()
 		obj := &corev1.Secret{}

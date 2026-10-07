@@ -65,7 +65,7 @@ Set `spec.kubeconfigServiceAccountEmail` on a `GCPManagedControlPlane`, or
 `spec.template.spec.kubeconfigServiceAccountEmail` on its template. For example:
 
 ```yaml
-kubeconfigServiceAccountEmail: capg-euw9-02-kubeconfig@kiowy-prod-gke-0.iam.gserviceaccount.com
+kubeconfigServiceAccountEmail: kubeconfig@example-project.iam.gserviceaccount.com
 ```
 
 Provision the account separately (for example, through Crossplane). Grant
